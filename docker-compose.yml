@@ -1,0 +1,110 @@
+services:
+  psono:
+    image: psono/psono-combo:latest
+    container_name: psono-combo
+    restart: unless-stopped
+    networks:
+      - psono-network
+    ports:
+      - "10200:80"
+    volumes:
+      - ./config/settings.yaml:/root/.psono_server/settings.yaml
+      - ./config/config.json:/usr/share/nginx/html/config.json
+      - ./config/config.json:/usr/share/nginx/html/portal/config.json
+      - ./config/email_backend.py:/root/psono/restapi/email_backend.py
+      - ./${CERT_DIR}/${CERT_NAME}.crt:/root/psono/psono/mailserver.crt
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - EMAIL_BACKEND="psono.email_backend.CustomSSLEmailBackend"
+      - PSONO_SECRET_KEY=${PSONO_SECRET_KEY}
+      - PSONO_ACTIVATION_LINK_SECRET=${PSONO_ACTIVATION_LINK_SECRET}
+      - PSONO_DB_SECRET=${PSONO_DB_SECRET}
+      - PSONO_EMAIL_SECRET_SALT=${PSONO_EMAIL_SECRET_SALT}
+      - PSONO_PRIVATE_KEY=${PSONO_PRIVATE_KEY}
+      - PSONO_PUBLIC_KEY=${PSONO_PUBLIC_KEY}
+      - PSONO_EMAIL_HOST_USER=${PSONO_EMAIL_HOST_USER}
+      - PSONO_EMAIL_HOST_PASSWORD=${PSONO_EMAIL_HOST_PASSWORD}
+      - PSONO_EMAIL_FROM=${PSONO_EMAIL_FROM}
+      - PSONO_EMAIL_HOST=${EMAIL_HOST} # Use the service name as the hostname
+      - PSONO_EMAIL_PORT=${EMAIL_SMTP_PORT}        # MailPit SMTP port 
+      - PSONO_EMAIL_USE_TLS="True" # Mailpit doesn't use TLS by default
+      - PSONO_EMAIL_USE_SSL="false"
+      - CERT_NAME=${CERT_NAME}
+      - CERT_PATH=/root/psono/psono/${CERT_NAME}.crt
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - LOGGING_LEVEL=DEBUG
+    depends_on:
+      db:
+        condition: service_healthy
+      mailserver:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl", "-f", "http://localhost:10200/server/healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    stdin_open: true # docker run -i
+    tty: true        # docker run -t
+    # command: >
+    #   tail -f /dev/null 
+
+  db:
+    image: postgres:14-alpine
+    container_name: psono-db
+    restart: unless-stopped
+    networks:
+      - psono-network
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGUSER: ${POSTGRES_USER}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./db/init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mailserver:
+    image: "axllent/mailpit:latest"
+    container_name: psono-mailserver
+    ports:
+      - "${EMAIL_SMTP_PORT}:${EMAIL_SMTP_PORT}"  # SMTP Port
+      - "${EMAIL_WEB_PORT}:${EMAIL_WEB_PORT}"    # Web UI Port
+    networks:
+      - psono-network
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+      MP_MAX_MESSAGES: 5000
+      MP_DATABASE: /data/mailpit.db
+      MP_SMTP_TLS_CERT: /etc/mailpit/${CERT_NAME}.pem
+      MP_SMTP_TLS_KEY: /etc/mailpit/${CERT_NAME}.key
+      TZ: Europe/Kyiv
+      MP_VERBOSE: 1
+    volumes:
+      - ./mailpit:/data
+      - ./${CERT_DIR}/${CERT_NAME}.pem:/etc/mailpit/${CERT_NAME}.pem:ro
+      - ./${CERT_DIR}/${CERT_NAME}.key:/etc/mailpit/${CERT_NAME}.key:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${EMAIL_WEB_PORT}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+
+volumes:
+  db_data:
+  psono_shard:
+  
+networks:
+  psono-network:
+    driver: bridge
